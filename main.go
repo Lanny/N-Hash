@@ -8,7 +8,7 @@ import (
 
 
 type LLNode struct {
-  value string
+  value int
   next *LLNode
 }
 
@@ -16,6 +16,11 @@ type Node struct {
   one *Node
   zer *Node
   terminal *LLNode
+}
+
+type groupedText struct {
+  value string
+  group int
 }
 
 func LLLen(curNode *LLNode) int {
@@ -28,7 +33,7 @@ func LLLen(curNode *LLNode) int {
   return length
 }
 
-func ExpandTree(root *Node, code []byte, value string) {
+func ExpandTree(root *Node, code []byte, value int) {
   var i, j, k uint
   var bit byte
   var newNode *Node
@@ -114,6 +119,30 @@ func rFindNeighbors(curNode *Node, code []byte,
   return leaves
 }
 
+func LeafCount(root *Node, countSets bool) int {
+  // If countSets is false, return the number of unique leaves in the tree,
+  // otherwise return the sum of leaf set counts (unique entries in the tree
+  // verses total entries in the tree)
+  total := 0
+
+  if root.terminal != nil {
+    if countSets {
+      return LLLen(root.terminal)
+    } else {
+      return 1
+    }
+  }
+
+  if root.one != nil {
+    total += LeafCount(root.one, countSets)
+  }
+  if root.zer != nil {
+    total += LeafCount(root.zer, countSets)
+  }
+
+  return total
+}
+
 func smallHash(arr []byte) int {
   result := md5.Sum(arr);
   return int(result[len(result)-1])
@@ -153,25 +182,35 @@ func Nhash(s []byte) []byte {
 func main() {
   SearchTree := new(Node)
 
+  DoD := 40 // Degrees of Deviance 
+  lastId := 1
+  grouped := make([]*groupedText, 0)
+
   tweetFile, err := os.Open("tweets.txt")
   reader := bufio.NewReader(tweetFile)
 
   var line []byte
   for ; err == nil; line, err = reader.ReadSlice('\n') {
     nCode := Nhash(line)
-    ExpandTree(SearchTree, nCode, string(line))
+
+    neighbors := FindNeighbors(SearchTree, nCode, DoD)
+    var thisId int
+    if len(neighbors) == 0 {
+      lastId++
+      ExpandTree(SearchTree, nCode, lastId)
+      thisId = lastId
+    } else {
+      thisId = neighbors[0].terminal.value
+    }
+
+    g := new(groupedText)
+    g.group = thisId
+    g.value = string(line)
+
+    grouped = append(grouped, g)
   }
 
-  knownMember := []byte("RT @wilw: RT @Theremina: This hilarious graph of Netflix speeds shows the importance of net neutrality http://t.co/B2yMqAkyuC")
-  kmCode := Nhash(knownMember)
-
-  neighbors := FindNeighbors(SearchTree, kmCode, 70)
-  fmt.Println(neighbors)
-
-  for _, tN := range neighbors {
-    ll := tN.terminal
-    fmt.Println("length:", LLLen(ll))
-
-    fmt.Println(ll.value)
-  }
+  fmt.Printf("With %d degrees of deviance, %d entries were grouped into " +
+      "%d unique groups\n",
+    DoD, len(grouped), LeafCount(SearchTree, false))
 }

@@ -2,15 +2,33 @@ package main
 
 import (
   "fmt"
+  "bufio"
+  "os"
   "crypto/md5")
+
+
+type LLNode struct {
+  value string
+  next *LLNode
+}
 
 type Node struct {
   one *Node
   zer *Node
-  terminal int
+  terminal *LLNode
 }
 
-func ExpandTree(root *Node, code []byte, value int) {
+func LLLen(curNode *LLNode) int {
+  length := 0
+  for curNode != nil {
+    length++
+    curNode = curNode.next
+  }
+
+  return length
+}
+
+func ExpandTree(root *Node, code []byte, value string) {
   var i, j, k uint
   var bit byte
   var newNode *Node
@@ -23,19 +41,77 @@ func ExpandTree(root *Node, code []byte, value int) {
 
     if bit == 0 {
       newNode = curNode.zer
+      if newNode == nil {
+        newNode = new(Node)
+        curNode.zer = newNode
+      }
     } else {
       newNode = curNode.one
-    }
-
-    if newNode == nil {
-      newNode = new(Node)
-      newNode.terminal = 0
+      if newNode == nil {
+        newNode = new(Node)
+        curNode.one = newNode
+      }
     }
 
     curNode = newNode
   }
 
-  curNode.terminal = value
+  // Create a linked list node and make it the head of list stored at this leaf
+  lln := new(LLNode)
+  lln.value = value
+  lln.next = curNode.terminal
+
+  curNode.terminal = lln
+}
+
+func FindNeighbors(root *Node, code []byte, deviance int) []*Node {
+  // Given a Nhash b-tree find and return all leaf nodes that have 255-n or
+  // more bits in common with the given code where n is deviance
+  return rFindNeighbors(root, code, deviance, 0)
+}
+
+func rFindNeighbors(curNode *Node, code []byte,
+                    deviance int, depth uint) []*Node {
+  // Hey, we reached a leaf. Sweet.
+  if curNode.terminal != nil {
+    r := make([]*Node, 1)
+    r[0] = curNode
+    return r
+  }
+
+  var j, k uint
+  j = depth/8
+  k = 7-(depth%8)
+
+  bit := (code[j] >> k) & 1
+
+  var (
+    freeNode *Node
+    deviantNode *Node)
+  if bit == 0 {
+    freeNode = curNode.zer
+    deviantNode = curNode.one
+  } else {
+    freeNode = curNode.one
+    deviantNode = curNode.zer
+  }
+
+  if (freeNode == nil && deviantNode == nil) ||
+     (freeNode == nil && deviance <= 0) {
+    return make([]*Node, 0)
+  }
+
+  var leaves []*Node
+  if freeNode != nil {
+    leaves = rFindNeighbors(freeNode, code, deviance, depth+1)
+  }
+
+  if deviance > 0 && deviantNode != nil {
+    deviantNeighbors := rFindNeighbors(deviantNode, code, deviance-1, depth+1)
+    leaves = append(leaves, deviantNeighbors...)
+  }
+
+  return leaves
 }
 
 func smallHash(arr []byte) int {
@@ -77,9 +153,29 @@ func Nhash(s []byte) []byte {
 func main() {
   SearchTree := new(Node)
 
-  str := []byte("Sup brajadoodle do.")
-  // str2 := []byte("Sup brojadoodle do?")
-  code1 := Nhash(str)
-  ExpandTree(SearchTree, code1, 42)
-  fmt.Println(code1)
+  tweetFile, err := os.Open("tweets.txt")
+  reader := bufio.NewReader(tweetFile)
+
+  var line []byte
+  for ; err == nil; line, err = reader.ReadSlice('\n') {
+    nCode := Nhash(line)
+    ExpandTree(SearchTree, nCode, string(line))
+  }
+
+  knownMember := []byte("RT @wilw: RT @Theremina: This hilarious graph of Netflix speeds shows the importance of net neutrality http://t.co/B2yMqAkyuC")
+  kmCode := Nhash(knownMember)
+
+  neighbors := FindNeighbors(SearchTree, kmCode, 20)
+  fmt.Println(neighbors)
+
+  for _, tN := range neighbors {
+    ll := tN.terminal
+    fmt.Println("length:", LLLen(ll))
+
+    curNode := ll
+    for curNode != nil {
+      fmt.Println(curNode.value)
+      curNode = curNode.next
+    }
+  }
 }

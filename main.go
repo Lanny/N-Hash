@@ -165,17 +165,13 @@ func main() {
   knownMember := []byte("RT @wilw: RT @Theremina: This hilarious graph of Netflix speeds shows the importance of net neutrality http://t.co/B2yMqAkyuC")
   kmCode := Nhash(knownMember)
 
-  neighbors := FindNeighbors(SearchTree, kmCode, 20)
+  neighbors := FindNeighbors(SearchTree, kmCode, 70)
   fmt.Println(neighbors)
 
   for _, tN := range neighbors {
     ll := tN.terminal
     fmt.Println("length:", LLLen(ll))
 
-    curNode := ll
-    for curNode != nil {
-      fmt.Println(curNode.value)
-      curNode = curNode.next
-    }
+    fmt.Println(ll.value)
   }
 }

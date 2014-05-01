@@ -6,6 +6,8 @@ import (
   "os"
   "crypto/md5")
 
+const DoD = 40 // Degrees of Deviance 
+const CONCURRENCY = 4
 
 type LLNode struct {
   value int
@@ -21,6 +23,35 @@ type Node struct {
 type groupedText struct {
   value string
   group int
+}
+
+type mCloseChan struct {
+  senders int
+  closes int
+  wChan chan *groupedText
+  lock chan bool
+}
+
+func makeMMC(n int) *mCloseChan {
+  // Make a new mCloseChan which will need to be closed n times before the
+  // wrapped channel is closed. Used for closing channels where there are
+  // multiple senders terminating asyncrynously.
+  mcc := new(mCloseChan)
+  mcc.senders = n
+  mcc.wChan = make(chan *groupedText, n)
+  mcc.lock = make(chan bool, 1)
+
+  return mcc
+}
+
+func mClose(mcc *mCloseChan) {
+  mcc.lock <- true
+  mcc.closes++
+
+  if (mcc.closes >= mcc.senders) {
+    close(mcc.wChan)
+  }
+  <-mcc.lock
 }
 
 func LLLen(curNode *LLNode) int {
@@ -119,6 +150,53 @@ func rFindNeighbors(curNode *Node, code []byte,
   return leaves
 }
 
+func Relate(root *Node, textChan chan []byte, writeLock chan bool,
+    resultChan *mCloseChan, idChan chan int) {
+  for line := range textChan {
+    nCode := Nhash(line)
+
+    neighbors := FindNeighbors(root, nCode, DoD)
+
+    var thisId int // ID of the group we're assigning this inst to, be it new
+                   // or already extant.
+
+    if len(neighbors) == 0 {
+      // Gotta add a new branch, lock so we're the only writer, read again to
+      // make sure nothing has been added since we checked, and if not write
+      writeLock <- true
+
+      neighbors = FindNeighbors(root, nCode, DoD)
+      if len(neighbors) == 0 {
+        thisId = <-idChan
+        ExpandTree(root, nCode, thisId)
+      } else {
+        thisId = neighbors[0].terminal.value
+      }
+      <-writeLock
+    } else {
+      thisId = neighbors[0].terminal.value
+    }
+
+    g := new(groupedText)
+    g.group = thisId
+    g.value = string(line)
+
+    resultChan.wChan <- g
+  }
+
+  mClose(resultChan)
+}
+
+func generateUniqueIds(comm chan int, terminate chan int) {
+  // Takes an unbuffered channel and continually puts sequential ints to it,
+  // and returns when first value is given to `terminate`.
+  i := 0
+  for len(terminate) == 0 {
+    comm <- i
+    i++
+  }
+}
+
 func LeafCount(root *Node, countSets bool) int {
   // If countSets is false, return the number of unique leaves in the tree,
   // otherwise return the sum of leaf set counts (unique entries in the tree
@@ -182,33 +260,40 @@ func Nhash(s []byte) []byte {
 func main() {
   SearchTree := new(Node)
 
-  DoD := 40 // Degrees of Deviance 
-  lastId := 1
   grouped := make([]*groupedText, 0)
+
+  idChan := make(chan int, 0)
+  idGenCloseChan := make(chan int, 1)
+
+  go generateUniqueIds(idChan, idGenCloseChan)
 
   tweetFile, err := os.Open("tweets.txt")
   reader := bufio.NewReader(tweetFile)
 
-  var line []byte
-  for ; err == nil; line, err = reader.ReadSlice('\n') {
-    nCode := Nhash(line)
+  inChan := make(chan []byte, CONCURRENCY)
+  writeLock := make(chan bool, 1)
+  outChan := makeMMC(CONCURRENCY)
 
-    neighbors := FindNeighbors(SearchTree, nCode, DoD)
-    var thisId int
-    if len(neighbors) == 0 {
-      lastId++
-      ExpandTree(SearchTree, nCode, lastId)
-      thisId = lastId
-    } else {
-      thisId = neighbors[0].terminal.value
+  for i := 0; i < CONCURRENCY; i++ {
+    go Relate(SearchTree, inChan, writeLock, outChan, idChan)
+  }
+
+  // Read those suckers in
+  go func() {
+    var line []byte
+    for ; err == nil; line, err = reader.ReadSlice('\n') {
+      inChan <- line
     }
 
-    g := new(groupedText)
-    g.group = thisId
-    g.value = string(line)
+    close(inChan)
+  }()
 
+  for g := range outChan.wChan {
     grouped = append(grouped, g)
   }
+
+  idGenCloseChan <- 1
+  fmt.Println("Last id:", <-idChan)
 
   fmt.Printf("With %d degrees of deviance, %d entries were grouped into " +
       "%d unique groups\n",
